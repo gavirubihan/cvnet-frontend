@@ -86,9 +86,9 @@ export default function RecruiterSidebar() {
       {/* Settings + User */}
       <div className="border-t border-slate-700">
         <Link
-          href="/settings"
+          href="/recruiter/settings"
           className={`flex items-center gap-3 px-6 py-3 text-sm font-medium transition-colors ${
-            pathname === "/settings"
+            pathname === "/recruiter/settings"
               ? "text-blue-400"
               : "text-slate-400 hover:text-white"
           }`}
