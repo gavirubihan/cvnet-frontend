@@ -16,75 +16,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
 
+  // 1. Core Authentication Listener Configuration
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       
       if (currentUser) {
         const token = await currentUser.getIdToken();
-        // Set secure session cookie
         document.cookie = `cvnet_token=${token}; path=/; max-age=3600; SameSite=Strict; Secure`;
       } else {
-        // Clear cookie cleanly
         document.cookie = "cvnet_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
       }
-      
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  /**
-   * FIX 1: PROACTIVE TOKEN REFRESH INTERVAL (For continuous 1-hour working)
-   * This runs in the background and fetches a fresh JWT token every 10 minutes,
-   * keeping the cookie alive indefinitely while the user is actively working.
-   */
+  // 2. Proactive Background Token Refresher
   useEffect(() => {
+    if (!user) return; // Only run if a user session is active
+
     const handleRefresh = async () => {
       if (auth.currentUser) {
-        console.log("🔄 Background refresh: Extending authorization cookie lifespan...");
-        const freshToken = await auth.currentUser.getIdToken(true); // true forces token refresh
-        document.cookie = `cvnet_token=${freshToken}; path=/; max-age=3600; SameSite=Strict; Secure`;
+        try {
+          console.log("🔄 Background refresh: Extending authorization cookie lifespan...");
+          const freshToken = await auth.currentUser.getIdToken(true);
+          document.cookie = `cvnet_token=${freshToken}; path=/; max-age=3600; SameSite=Strict; Secure`;
+        } catch (err) {
+          console.error("Failed to silently rotate security token context", err);
+        }
       }
     };
 
-    // Refresh every 10 minutes (600,000 ms)
-    const interval = setInterval(handleRefresh, 10 * 60 * 1000);
-    return () => clearInterval(interval);
+    const interval = setInterval(handleRefresh, 10 * 60 * 1000); // 10 Minutes
+    return () => clearInterval(interval); // Clean up on unmount or user change
   }, [user]);
 
-  /**
-   * FIX 2: IDLE AUTO-REFRESH & FIREBASE CLEANUP RE-LOGIN FIX
-   * If the user is on a protected route and the cookie disappears due to idleness,
-   * we force an explicit Firebase logout and snap them to the login page.
-   * This completely avoids the stuck UI/no-login bug.
-   */
+  // 3. FIX: Memory-Safe Idle Cookie Scanner Loop
   useEffect(() => {
-    // Define your public paths
     const publicRoutes = ["/login", "/signup", "/"];
     const isPublicRoute = publicRoutes.includes(pathname);
 
-    if (!isPublicRoute) {
-      const checkCookieInterval = setInterval(async () => {
-        const hasTokenCookie = document.cookie.split("; ").some((row) => row.startsWith("cvnet_token="));
+    // Memory Guard: If it's a public route, do absolutely nothing
+    if (isPublicRoute) return;
 
-        // If cookie has vanished but Firebase still thinks we're logged in
-        if (!hasTokenCookie && auth.currentUser) {
-          console.log("🚨 Session Cookie Expired via Idleness! Executing explicit cleanup...");
-          clearInterval(checkCookieInterval);
-          
-          // Force a full Firebase clean sign-out to unlock the login UI state
-          await signOut(auth);
-          
-          // Push them back to the login screen seamlessly
-          router.push("/login");
-        }
-      }, 5000); // Scans cookie presence every 5 seconds
+    const checkCookieInterval = setInterval(async () => {
+      const hasTokenCookie = document.cookie.split("; ").some((row) => row.startsWith("cvnet_token="));
 
-      return () => clearInterval(checkCookieInterval);
-    }
-  }, [pathname, router]);
+      if (!hasTokenCookie && auth.currentUser) {
+        console.log("🚨 Session Cookie Expired via Idleness! Executing memory cleanup...");
+        
+        // Clear interval immediately before triggering asynchronous redirection flows
+        clearInterval(checkCookieInterval);
+        
+        await signOut(auth);
+        router.push("/login");
+      }
+    }, 5000); // Scan interval safely every 5 seconds
+
+    // CRITICAL FIX: Ensure the interval is cleared when the user leaves the page or logs out
+    return () => clearInterval(checkCookieInterval);
+  }, [pathname, user, router]); // Added 'user' to dependencies for safe synchronization boundaries
 
   return (
     <AuthContext.Provider value={{ user, loading }}>
